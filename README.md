@@ -3,7 +3,7 @@
 [<img src="https://badges.ws/maintenance/yes/2026" alt="Maintained in 2026" />](https://github.com/vladkens/badges)
 <picture><img src="https://badges.ws/handmade" alt="Handmade badge preset" /></picture>
 
-Chacha20 with Blake3 verification made in rust based off the [RFC 8439](https://datatracker.ietf.org/doc/html/rfc8439.html) with the Blake3 tweak.
+Chacha20 with Blake3 verification made in rust based off the [RFC 8439](https://datatracker.ietf.org/doc/html/rfc8439.html) with the Blake3 tweak. Translation was originally made out of a Chacha20-Poly1305 implementation in C.
 # examples
 It is possible to test this implementation with the ```FileEncrypt``` example
 ```bash
