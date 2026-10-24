@@ -4,15 +4,15 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::Instant;
+
+use rand::Rng;
 use serde::{Deserialize, Serialize};
+
 use chacha20_blake3::{
-    ChaCha20Blake3,
-    ChaCha20Blake3Payload,
-    xchacha20_encrypt,
+    blake3_mac,
     xchacha20_decrypt,
-    b3k_from_cc20k,
-    b3_twk,
-    b3_verify
+    xchacha20_encrypt,
+    Session20b3,
 };
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -96,19 +96,17 @@ fn encrypt_file(input_path: &PathBuf, output_path: &PathBuf, key_path: &PathBuf)
         key_file
     };
 
-    let key = key_file.key;
-
-    let info = ChaCha20Blake3 {
-        key,
+    let info = Session20b3 {
+        key: key_file.key,
         nonce: [0, 0, 0],
         counter: 1,
     };
 
     println!("[+] Encrypting data...");
-    let (ciphertext, nonce) = xchacha20_encrypt(&info, plaintext);
+    let (ciphertext, nonce) = xchacha20_encrypt(&info, &plaintext);
 
-    let blake3_key = b3k_from_cc20k(&info.key);
-    let tag = b3_twk(&ciphertext, &blake3_key);
+    let blake3_key = blake3_mac::derive_key(&info.key);
+    let tag = blake3_mac::keyed_hash_nonce_ct(&nonce, &ciphertext, &blake3_key);
 
     let encrypted_file = EncryptedFile {
         nonce,
@@ -130,7 +128,10 @@ fn encrypt_file(input_path: &PathBuf, output_path: &PathBuf, key_path: &PathBuf)
     println!("[?] Original size: {} bytes", file_size);
     println!("[?] Encrypted size: {} bytes", encrypted_file.ciphertext.len());
     println!("[?] Total file size: {} bytes", serialized_data.len());
-    println!("[?] Serialization overhead: {} bytes", serialized_data.len() - encrypted_file.ciphertext.len());
+    println!(
+        "[?] Serialization overhead: {} bytes",
+        serialized_data.len() - encrypted_file.ciphertext.len()
+    );
     println!("[+] Output file: {}", output_path.display());
     println!("[+] Key file: {}", key_path.display());
 
@@ -175,34 +176,40 @@ fn decrypt_file(input_path: &PathBuf, output_path: &PathBuf, key_path: &PathBuf)
     println!("[?] Key version: {}", key_file.version);
 
     if key_file.version != encrypted_file.version {
-        println!("[!] Warning: Key version ({}) differs from file version ({})",
-                 key_file.version, encrypted_file.version);
+        println!(
+            "[!] Warning: Key version ({}) differs from file version ({})",
+            key_file.version, encrypted_file.version
+        );
     }
 
-    let mut ciphertext_with_nonce = encrypted_file.ciphertext;
-
-    for word in encrypted_file.nonce.iter() {
-        ciphertext_with_nonce.extend_from_slice(&word.to_le_bytes());
-    }
-
-    let info = ChaCha20Blake3 {
+    let info = Session20b3 {
         key: key_file.key,
         nonce: [0, 0, 0],
         counter: 1,
     };
 
-    let blake3_key = b3k_from_cc20k(&info.key);
+    let blake3_key = blake3_mac::derive_key(&info.key);
     println!("[+] Verifying authentication...");
 
-    let ciphertext_only = &ciphertext_with_nonce[..ciphertext_with_nonce.len() - 12];
-    if !b3_verify(ciphertext_only, &encrypted_file.tag, Some(&blake3_key)) {
+    if !blake3_mac::verify_nonce_ct(
+        &encrypted_file.nonce,
+        &encrypted_file.ciphertext,
+        &encrypted_file.tag,
+        &blake3_key,
+    ) {
         eprintln!("[-] Authentication failed! File may have been tampered with.");
         std::process::exit(1);
     }
     println!("[+] Authentication successful!");
 
     println!("[+] Decrypting data...");
-    let plaintext = xchacha20_decrypt(&info, ciphertext_with_nonce);
+
+    let mut ciphertext_with_nonce = encrypted_file.ciphertext.clone();
+    for word in encrypted_file.nonce.iter() {
+        ciphertext_with_nonce.extend_from_slice(&word.to_le_bytes());
+    }
+
+    let plaintext = xchacha20_decrypt(&info, &ciphertext_with_nonce);
 
     let mut output_file = File::create(output_path)?;
     output_file.write_all(&plaintext)?;
@@ -216,16 +223,16 @@ fn decrypt_file(input_path: &PathBuf, output_path: &PathBuf, key_path: &PathBuf)
 }
 
 fn generate_key() -> [u32; 8] {
-    [
-        rand::random::<u32>(),
-        rand::random::<u32>(),
-        rand::random::<u32>(),
-        rand::random::<u32>(),
-        rand::random::<u32>(),
-        rand::random::<u32>(),
-        rand::random::<u32>(),
-        rand::random::<u32>(),
-    ]
+    let mut key_bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut key_bytes);
+
+    let mut key = [0u32; 8];
+    for (i, chunk) in key_bytes.chunks_exact(4).enumerate() {
+        let mut b = [0u8; 4];
+        b.copy_from_slice(chunk);
+        key[i] = u32::from_le_bytes(b);
+    }
+    key
 }
 
 fn save_key_serialized(path: &PathBuf, key_file: &KeyFile) -> std::io::Result<()> {
