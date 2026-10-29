@@ -26,7 +26,6 @@ pub mod crypto;
 
 use rand::Rng;
 
-
 /*
     Debugging macro for printing debug logs.
     Usage:
@@ -315,6 +314,30 @@ pub fn chacha20_encrypt(info: &Session20b3, plaintext: &[u8]) -> Vec<u8> {
     out
 }
 
+/*
+  Blake3 helper functions
+    Key
+	derive_key		Derive key from a chacha20 key,
+				can be replaced also with crypto::get_key().
+    Hashing / MAC
+	hash			Obtains a Blake3 hash from a set of bytes
+	keyed_hash		Blake3 hash from a set of bytes
+				and with the key security
+	keyed_hash_nonce_ct	Blake3 hash from a set of bytes with extra
+				inputs of key and nonce and returns a tag
+
+    Verification
+	Both take a message, expected tag and an optional key except
+	verify_nonce_ct that the key is mandatory as well as the nonce
+
+	verify			Verifies an expected tag with the obtained one
+				returning true if both tags are the same
+	verify_nonce_ct		Verifies an expected tag with the obtained one
+				from the message and with nonce input
+	ct_eq_32		Function to get a constat time
+				comparation between 2 set of keys.
+*/
+
 pub mod blake3_mac {
     pub fn derive_key(chacha_key: &[u32; 8]) -> [u8; 32] {
         let mut key_bytes = [0u8; 32];
@@ -397,7 +420,7 @@ pub mod macros {
     use crate::Session20b3;
     use rand::Rng;
 
-    fn random_nonce() -> ([u32; 3], [u8; 12]) {
+    pub fn random_nonce() -> ([u32; 3], [u8; 12]) {
         let mut nonce_bytes = [0u8; 12];
         rand::rng().fill_bytes(&mut nonce_bytes);
 
@@ -411,7 +434,7 @@ pub mod macros {
         (nonce, nonce_bytes)
     }
 
-    fn seal(info: &Session20b3, plaintext: &[u8]) -> Vec<u8> {
+    pub fn seal(info: &Session20b3, plaintext: &[u8]) -> Vec<u8> {
         let (nonce, _) = random_nonce();
         let ciphertext = chacha20_encrypt(info, plaintext);
         let mac_key = blake3_mac::derive_key(&info.key);
@@ -427,7 +450,7 @@ pub mod macros {
         out
     }
 
-    fn open(info: &Session20b3, payload: &[u8]) -> Option<Vec<u8>> {
+    pub fn open(info: &Session20b3, payload: &[u8]) -> Option<Vec<u8>> {
         if payload.len() < 32 + 12 {
             return None;
         }
@@ -630,8 +653,8 @@ mod tests {
             nonce: [0, 0x4a000000, 0],
             counter: 0,
         };
-
-        let plaintext = vec![0xABu8; 255 * 1024 * 1024];
+        const BYTES_FOR_TEST: usize = 255;
+        let plaintext = vec![0xABu8; BYTES_FOR_TEST * 1024 * 1024];
 
         let start = Instant::now();
         let (ciphertext, nonce) = xchacha20_encrypt(&information, &plaintext);
@@ -658,7 +681,7 @@ mod tests {
         let decrypt_elapsed = start.elapsed();
         assert_eq!(decrypted, plaintext);
 
-        let mb = 255.0;
+        let mb = BYTES_FOR_TEST as f64;
         let start = Instant::now();
         let _ = chacha20_block(&information, 0);
         let single_block = start.elapsed();
